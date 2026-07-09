@@ -57,8 +57,10 @@ Start-ScheduledTask -TaskName $TaskName
 Write-Host ""
 Write-Host "Installed. Log: $env:LOCALAPPDATA\ScreenSender\sender.log"
 Write-Host ""
-Write-Host "REMAINING MANUAL STEPS on this machine:" -ForegroundColor Yellow
-Write-Host "  1. Enable auto-login, or the machine stops at the lock screen after a reboot."
-Write-Host "  2. Disable the screen saver's 'On resume, display logon screen' option."
-Write-Host "  3. Set the lock screen / sleep policy so the session never locks."
-Write-Host "     (Display power-off is fine; a LOCKED session captures black.)"
+Write-Host "REMAINING MANUAL STEPS on this machine (goal: stay logged-in and awake forever):" -ForegroundColor Yellow
+Write-Host "  1. Auto-login (netplwiz): reboot must land on the desktop, not the password screen."
+Write-Host "  2. Never sleep: Settings > System > Power > Sleep = Never."
+Write-Host "     (A sleeping PC stops the app entirely. Monitor power-off alone is fine.)"
+Write-Host "  3. Never lock: Settings > Accounts > Sign-in options > 'Require sign-in' = Never,"
+Write-Host "     and if a screen saver is enabled, untick 'On resume, display logon screen'."
+Write-Host "     (A locked session captures as a black screen.)"
