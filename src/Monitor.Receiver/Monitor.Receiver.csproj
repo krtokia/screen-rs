@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>ScreenReceiver</AssemblyName>
+
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+
+  <!-- REQUIREMENTS.md §6.2: the port must match the value baked into the sender. -->
+  <PropertyGroup>
+    <ListenPort Condition="'$(ListenPort)' == ''">45871</ListenPort>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyMetadata Include="ListenPort" Value="$(ListenPort)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Monitor.Protocol\Monitor.Protocol.csproj" />
+  </ItemGroup>
+
+</Project>

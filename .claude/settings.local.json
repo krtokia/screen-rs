@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell($dotnet = Get-Command dotnet -ErrorAction SilentlyContinue; if \\($dotnet\\) { \"dotnet found: $\\($dotnet.Source\\)\"; dotnet --list-sdks } else { \"dotnet NOT found\" })"
+    ]
+  }
+}

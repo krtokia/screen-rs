@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>ScreenSender</AssemblyName>
+
+    <!-- REQUIREMENTS.md §11: no .NET runtime install on the remote machine. -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+
+  <!--
+    REQUIREMENTS.md §6.1: every sender setting is frozen at build time.
+    Override with:  dotnet publish -p:ReceiverHost=10.0.0.5 -p:DeviceId=SENDER-01
+  -->
+  <PropertyGroup>
+    <ReceiverHost Condition="'$(ReceiverHost)' == ''">127.0.0.1</ReceiverHost>
+    <ReceiverPort Condition="'$(ReceiverPort)' == ''">45871</ReceiverPort>
+    <DeviceId Condition="'$(DeviceId)' == ''">SENDER-01</DeviceId>
+    <CaptureFps Condition="'$(CaptureFps)' == ''">3</CaptureFps>
+    <JpegQuality Condition="'$(JpegQuality)' == ''">60</JpegQuality>
+    <CaptureScale Condition="'$(CaptureScale)' == ''">1.0</CaptureScale>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyMetadata Include="ReceiverHost" Value="$(ReceiverHost)" />
+    <AssemblyMetadata Include="ReceiverPort" Value="$(ReceiverPort)" />
+    <AssemblyMetadata Include="DeviceId" Value="$(DeviceId)" />
+    <AssemblyMetadata Include="CaptureFps" Value="$(CaptureFps)" />
+    <AssemblyMetadata Include="JpegQuality" Value="$(JpegQuality)" />
+    <AssemblyMetadata Include="CaptureScale" Value="$(CaptureScale)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Monitor.Protocol\Monitor.Protocol.csproj" />
+  </ItemGroup>
+
+</Project>
