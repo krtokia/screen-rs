@@ -15,6 +15,12 @@ public sealed class MainForm : Form
 
     public MainForm(int port)
     {
+        // Must exist before any property that can fire OnResize (ClientSize does, from inside
+        // the ctor) — OnResize dereferences _server.
+        _server = new ReceiverServer(port);
+        _server.FrameReceived += OnFrame;
+        _server.StatusChanged += OnStatus;
+
         Text = "Screen Receiver";
         BackColor = Color.Black;
         ClientSize = new Size(1280, 720);
@@ -22,9 +28,6 @@ public sealed class MainForm : Form
         DoubleBuffered = true;
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
 
-        _server = new ReceiverServer(port);
-        _server.FrameReceived += OnFrame;
-        _server.StatusChanged += OnStatus;
         _server.Start();
     }
 
@@ -62,6 +65,8 @@ public sealed class MainForm : Form
     protected override void OnResize(EventArgs e)
     {
         base.OnResize(e);
+        // WinForms raises OnResize from inside our own ctor; guard against any field not yet set.
+        if (_server is null) return;
         _server.SetPaused(WindowState == FormWindowState.Minimized);
         Invalidate();
     }
