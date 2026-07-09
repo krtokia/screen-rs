@@ -37,17 +37,16 @@ dotnet publish src/Monitor.Receiver -c Release -o dist/receiver
 ## 로컬 검증 (PC 한 대에서)
 
 1. `dist/receiver/ScreenReceiver.exe` 실행 → 검은 창이 "waiting on port 45871"
-2. `-ReceiverHost 127.0.0.1`로 전송측을 빌드해 실행 → 자기 화면이 창에 뜬다
+2. `-ReceiverHost 127.0.0.1`로 전송측을 빌드하고 `ScreenSender.exe --run` 으로 실행 → 자기 화면이 창에 뜬다
+   (`--run` 은 자체 설치를 건너뛰고 그 자리에서 바로 실행하는 테스트용 스위치다)
 3. 수신측 창 최소화 → 전송측 CPU가 0으로 떨어지는지 작업 관리자로 확인
 4. 수신측 종료 후 재실행 → 전송측을 만지지 않아도 재접속
 
-## 설치 (전송측 PC, 관리자 권한)
+## 설치 (전송측 PC)
 
-```powershell
-./scripts/install-sender.ps1
-```
+**`ScreenSender.exe` 를 더블클릭한다.** 스크립트도 관리자 권한도 필요 없다.
 
-`%LOCALAPPDATA%\ScreenSender\`에 복사하고 "로그온 시 실행" 작업을 등록한다. 그 다음 수동 설정 3가지를 해야 하는데, 목표는 하나다: **"방금 로그인해서 쓰다가 자리 비운 상태"가 영원히 유지되는 PC.**
+exe가 스스로 `%LOCALAPPDATA%\ScreenSender\` 로 복사하고, 로그온 시 자동 시작(HKCU Run)을 등록한 뒤, 설치된 복사본을 실행한다. 그리고 아래 수동 3가지를 안내하는 창을 띄운다. 목표는 하나다: **"방금 로그인해서 쓰다가 자리 비운 상태"가 영원히 유지되는 PC.**
 
 1. **자동 로그인** (`netplwiz`) — 재부팅하면 암호 화면이 아니라 바탕화면까지 저절로 간다
 2. **절전 끄기** (설정 → 시스템 → 전원 → 절전 모드 "안 함") — 잠든 PC는 앱 자체가 멈춘다. 모니터만 꺼지는 건 무해

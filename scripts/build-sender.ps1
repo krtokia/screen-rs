@@ -43,4 +43,5 @@ if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit code $LASTEXIT
 Write-Host ""
 Write-Host "Built ScreenSender.exe -> $ReceiverHost`:$ReceiverPort  (id=$DeviceId, ${CaptureFps}fps, q$JpegQuality, scale $CaptureScale)"
 Write-Host "Output: $OutDir"
-Write-Host "Copy the folder to the sender machine and run install-sender.ps1 there as Administrator."
+Write-Host "Copy ScreenSender.exe to the sender machine and double-click it. It installs itself"
+Write-Host "(copy to %LOCALAPPDATA%, register logon auto-start) and shows the manual setup steps."
