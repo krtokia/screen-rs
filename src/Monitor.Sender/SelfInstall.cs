@@ -40,6 +40,18 @@ public static class SelfInstall
         try
         {
             Directory.CreateDirectory(InstallDir);
+
+            // §6.1 — ask for the per-machine values while a human is guaranteed to be present.
+            // Prefilled with what the machine currently uses: the existing settings file on an
+            // update, baked-in build values on a first install. Cancel keeps things as they are.
+            using (var dialog = new SettingsDialog(Settings.Load()))
+            {
+                if (dialog.ShowDialog() == DialogResult.OK && !Settings.Apply(dialog.Value))
+                    MessageBox.Show(
+                        $"설정 파일 저장에 실패했습니다. 빌드에 내장된 기본값으로 동작합니다.\n\n{Settings.FilePath}",
+                        "Screen Sender", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+
             KillInstalledCopy();
             File.Copy(current, InstalledExe, overwrite: true);
             TryRegisterAutoStart();

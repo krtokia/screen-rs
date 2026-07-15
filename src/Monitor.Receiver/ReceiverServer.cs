@@ -6,21 +6,30 @@ using Monitor.Protocol;
 namespace Monitor.Receiver;
 
 /// <summary>
-/// REQUIREMENTS.md §5, §8.2. Listens for the sender. Exactly one connection is live at a time;
-/// a new one always wins, which is how a rebooted sender recovers from a half-open socket (§13.3).
+/// REQUIREMENTS.md §5, §8.2. Listens for senders. One live session per DEVICE_ID; a new connection
+/// with the same id always replaces the old one, which is how a rebooted sender recovers from a
+/// half-open socket (§13.3). Different ids run side by side — the UI picks which one to show and
+/// pauses the rest.
 /// </summary>
 public sealed class ReceiverServer : IDisposable
 {
     private readonly int _port;
     private readonly CancellationTokenSource _stop = new();
     private readonly object _gate = new();
+    private readonly Dictionary<string, Session> _sessions = new(StringComparer.Ordinal);
 
-    private TcpClient? _client;
-    private NetworkStream? _stream;
-    private bool _paused;
+    private sealed class Session
+    {
+        public required TcpClient Client;
+        public required NetworkStream Stream;
+        public bool Paused;
+    }
 
     /// <summary>Raised off the UI thread. The receiver takes ownership of the bitmap.</summary>
-    public event Action<Bitmap, string>? FrameReceived;
+    public event Action<string, int, int, Bitmap>? FrameReceived; // deviceId, monitorIndex, monitorCount
+
+    /// <summary>Raised off the UI thread whenever a sender connects or disconnects.</summary>
+    public event Action? SendersChanged;
 
     public event Action<string>? StatusChanged;
 
@@ -28,21 +37,29 @@ public sealed class ReceiverServer : IDisposable
 
     public void Start() => new Thread(AcceptLoop) { IsBackground = true, Name = "accept" }.Start();
 
-    /// <summary>§7.4. Told from the UI thread whenever the window becomes (in)visible.</summary>
-    public void SetPaused(bool paused)
+    public IReadOnlyList<string> ConnectedSenders
+    {
+        get { lock (_gate) return _sessions.Keys.OrderBy(k => k, StringComparer.Ordinal).ToArray(); }
+    }
+
+    /// <summary>
+    /// §7.4. Told from the UI thread. Pausing is per sender: the one on screen streams, the rest
+    /// (and everything while minimised) sit at zero CPU on their machines.
+    /// </summary>
+    public void SetPaused(string deviceId, bool paused)
     {
         lock (_gate)
         {
-            if (_paused == paused || _stream is null) return;
-            _paused = paused;
+            if (!_sessions.TryGetValue(deviceId, out var session) || session.Paused == paused) return;
+            session.Paused = paused;
 
             try
             {
-                _stream.WriteByte(paused ? Wire.MsgPause : Wire.MsgResume);
+                session.Stream.WriteByte(paused ? Wire.MsgPause : Wire.MsgResume);
             }
             catch
             {
-                // The read loop will notice and tear the session down.
+                // The session's read loop will notice and tear it down.
             }
         }
     }
@@ -82,18 +99,7 @@ public sealed class ReceiverServer : IDisposable
                 continue;
             }
 
-            DropCurrent();
-            HandleClient(client);
-        }
-    }
-
-    private void DropCurrent()
-    {
-        lock (_gate)
-        {
-            _client?.Close();
-            _client = null;
-            _stream = null;
+            new Thread(() => HandleClient(client)) { IsBackground = true, Name = "session" }.Start();
         }
     }
 
@@ -101,6 +107,9 @@ public sealed class ReceiverServer : IDisposable
     {
         var peer = client.Client.RemoteEndPoint?.ToString() ?? "?";
         client.NoDelay = true;
+
+        string? deviceId = null;
+        Session? session = null;
 
         try
         {
@@ -110,7 +119,7 @@ public sealed class ReceiverServer : IDisposable
             var hs = new byte[Wire.HandshakeBytes];
             stream.ReadExactly(hs);
 
-            if (!Wire.TryParseHandshake(hs, out var version, out var deviceId))
+            if (!Wire.TryParseHandshake(hs, out var version, out deviceId))
             {
                 StatusChanged?.Invoke($"{peer}: not a sender, dropped");
                 return;
@@ -122,34 +131,47 @@ public sealed class ReceiverServer : IDisposable
                 return;
             }
 
+            session = new Session { Client = client, Stream = stream };
+
             lock (_gate)
             {
-                _client = client;
-                _stream = stream;
-                _paused = false;
+                // Same id already live: the newcomer wins (§13.3). Closing the old client makes its
+                // read loop throw; its finally sees it is no longer the registered session and
+                // leaves ours alone.
+                if (_sessions.TryGetValue(deviceId, out var old)) old.Client.Close();
+                _sessions[deviceId] = session;
             }
 
             StatusChanged?.Invoke($"connected: {deviceId} ({peer})");
+            SendersChanged?.Invoke();
+
             ReadMessages(stream, deviceId);
         }
         catch (Exception ex)
         {
-            StatusChanged?.Invoke($"disconnected: {ex.GetType().Name}");
+            StatusChanged?.Invoke($"{deviceId ?? peer} disconnected: {ex.GetType().Name}");
         }
         finally
         {
             client.Close();
-            lock (_gate)
+
+            var removed = false;
+            if (deviceId is not null && session is not null)
             {
-                if (ReferenceEquals(_client, client)) { _client = null; _stream = null; }
+                lock (_gate)
+                {
+                    if (_sessions.TryGetValue(deviceId, out var current) && ReferenceEquals(current, session))
+                        removed = _sessions.Remove(deviceId);
+                }
             }
-            StatusChanged?.Invoke($"waiting on port {_port}");
+
+            if (removed) SendersChanged?.Invoke();
         }
     }
 
     private void ReadMessages(NetworkStream stream, string deviceId)
     {
-        var header = new byte[Wire.FrameHeaderBytes];
+        var header = new byte[Wire.Frame2HeaderBytes];
         byte[] jpeg = new byte[1 << 20];
 
         while (!_stop.IsCancellationRequested)
@@ -159,11 +181,27 @@ public sealed class ReceiverServer : IDisposable
 
             if (type == Wire.MsgPing) continue;
 
-            if (type != Wire.MsgFrame)
-                throw new InvalidDataException($"unknown message type 0x{type:X2}");
+            int length, width, height, monitorIndex, monitorCount;
+            switch (type)
+            {
+                case Wire.MsgFrame:
+                    // v1 sender: the whole virtual screen as one image. Shown as a single monitor.
+                    stream.ReadExactly(header, 0, Wire.FrameHeaderBytes);
+                    Wire.ReadFrameHeader(header, out length, out width, out height);
+                    monitorIndex = 0;
+                    monitorCount = 1;
+                    break;
 
-            stream.ReadExactly(header);
-            Wire.ReadFrameHeader(header, out var length, out var width, out var height);
+                case Wire.MsgFrame2:
+                    stream.ReadExactly(header, 0, Wire.Frame2HeaderBytes);
+                    Wire.ReadFrame2Header(header, out length, out width, out height, out monitorIndex, out monitorCount);
+                    if (monitorCount < 1 || monitorCount > Wire.MaxMonitors || monitorIndex >= monitorCount)
+                        throw new InvalidDataException($"monitor {monitorIndex} of {monitorCount} out of range");
+                    break;
+
+                default:
+                    throw new InvalidDataException($"unknown message type 0x{type:X2}");
+            }
 
             if (length <= 0 || length > Wire.MaxJpegBytes)
                 throw new InvalidDataException($"frame length out of range: {length}");
@@ -177,14 +215,18 @@ public sealed class ReceiverServer : IDisposable
             using var decoded = Image.FromStream(ms, useEmbeddedColorManagement: false, validateImageData: false);
             var frame = new Bitmap(decoded);
 
-            FrameReceived?.Invoke(frame, $"{deviceId}  {width}x{height}");
+            FrameReceived?.Invoke(deviceId, monitorIndex, monitorCount, frame);
         }
     }
 
     public void Dispose()
     {
         _stop.Cancel();
-        DropCurrent();
+        lock (_gate)
+        {
+            foreach (var s in _sessions.Values) s.Client.Close();
+            _sessions.Clear();
+        }
         _stop.Dispose();
     }
 }

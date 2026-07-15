@@ -10,9 +10,21 @@ namespace Monitor.Sender;
 public sealed class SenderLoop
 {
     private readonly CancellationToken _stop;
+    private readonly AutoResetEvent _kick = new(false);
     private volatile bool _paused;
+    private volatile TcpClient? _active;
 
     public SenderLoop(CancellationToken stop) => _stop = stop;
+
+    /// <summary>
+    /// Called from the UI thread after the operator saves new settings: drop the live session (if
+    /// any) and retry immediately with the new values, even if the loop is deep in backoff.
+    /// </summary>
+    public void Reconnect()
+    {
+        try { _active?.Close(); } catch { }
+        _kick.Set();
+    }
 
     /// <summary>Last line of defence: the sender is remote and must never die. Any escape is swallowed.</summary>
     public void Run()
@@ -35,43 +47,60 @@ public sealed class SenderLoop
                 Log.Warn($"session ended: {ex.GetType().Name}: {ex.Message}");
             }
 
-            if (_stop.WaitHandle.WaitOne(backoff)) return;
+            switch (WaitHandle.WaitAny([_stop.WaitHandle, _kick], backoff))
+            {
+                case 0:
+                    return;
+                case 1: // settings changed — retry now, and from the shortest interval again
+                    backoff = BuildConfig.ReconnectMin;
+                    continue;
+            }
             backoff = TimeSpan.FromTicks(Math.Min(backoff.Ticks * 2, BuildConfig.ReconnectMax.Ticks));
         }
     }
 
     private void RunSession()
     {
+        var settings = Settings.Current;
+
         using var client = new TcpClient { NoDelay = true };
-        client.Connect(BuildConfig.ReceiverHost, BuildConfig.ReceiverPort);
-
-        using var stream = client.GetStream();
-        stream.WriteTimeout = 15_000;
-
-        Log.Info($"connected to {BuildConfig.ReceiverHost}:{BuildConfig.ReceiverPort}");
-
-        stream.Write(Wire.BuildHandshake(BuildConfig.DeviceId));
-
-        _paused = false;
-        using var sessionEnded = CancellationTokenSource.CreateLinkedTokenSource(_stop);
-        var control = Task.Run(() => ReadControl(stream, sessionEnded));
-
+        _active = client;
         try
         {
-            Pump(stream, sessionEnded.Token);
+            client.Connect(settings.ReceiverHost, settings.ReceiverPort);
+
+            using var stream = client.GetStream();
+            stream.WriteTimeout = 15_000;
+
+            Log.Info($"connected to {settings.ReceiverHost}:{settings.ReceiverPort} as {settings.DeviceId}");
+
+            stream.Write(Wire.BuildHandshake(settings.DeviceId));
+
+            _paused = false;
+            using var sessionEnded = CancellationTokenSource.CreateLinkedTokenSource(_stop);
+            var control = Task.Run(() => ReadControl(stream, sessionEnded));
+
+            try
+            {
+                Pump(stream, sessionEnded.Token);
+            }
+            finally
+            {
+                sessionEnded.Cancel();
+                client.Close();
+                control.Wait(TimeSpan.FromSeconds(2));
+            }
         }
         finally
         {
-            sessionEnded.Cancel();
-            client.Close();
-            control.Wait(TimeSpan.FromSeconds(2));
+            _active = null;
         }
     }
 
     private void Pump(NetworkStream stream, CancellationToken sessionEnded)
     {
         using var capturer = new ScreenCapturer();
-        var header = new byte[1 + Wire.FrameHeaderBytes];
+        var header = new byte[1 + Wire.Frame2HeaderBytes];
         var lastPing = Stopwatch.StartNew();
 
         while (!sessionEnded.IsCancellationRequested)
@@ -91,13 +120,19 @@ public sealed class SenderLoop
 
             var sw = Stopwatch.StartNew();
 
-            var (buffer, length, width, height) = capturer.CaptureJpeg();
-            Wire.WriteFrameHeader(header, length, width, height);
+            // One FRAME2 per monitor per tick. The receiver decides what to show; the sender
+            // stays dumb so it never needs a revisit for a display-side feature.
+            var count = capturer.RefreshLayout();
+            for (var i = 0; i < count; i++)
+            {
+                var (buffer, length, width, height) = capturer.CaptureMonitor(i);
+                Wire.WriteFrame2Header(header, length, width, height, i, count);
 
-            // §10 — this Write blocks when the link is slow, so the next capture simply happens
-            // later. Frames are dropped by never being taken, and latency cannot accumulate.
-            stream.Write(header);
-            stream.Write(buffer, 0, length);
+                // §10 — this Write blocks when the link is slow, so the next capture simply happens
+                // later. Frames are dropped by never being taken, and latency cannot accumulate.
+                stream.Write(header);
+                stream.Write(buffer, 0, length);
+            }
             lastPing.Restart();
 
             var remaining = BuildConfig.FrameInterval - sw.Elapsed;

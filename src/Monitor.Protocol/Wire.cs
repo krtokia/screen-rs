@@ -11,7 +11,8 @@ public static class Wire
     /// <summary>"OSM\x01" — 4 bytes.</summary>
     public static ReadOnlySpan<byte> Magic => [0x4F, 0x53, 0x4D, 0x01];
 
-    public const byte Version = 0x01;
+    /// <summary>v2 added FRAME2 (per-monitor frames). v1 senders in the field stay valid forever.</summary>
+    public const byte Version = 0x02;
 
     public const int MagicBytes = 4;
     public const int DeviceIdBytes = 16;
@@ -20,13 +21,20 @@ public static class Wire
     // Sender -> Receiver
     public const byte MsgFrame = 0x01;
     public const byte MsgPing = 0x02;
+    public const byte MsgFrame2 = 0x03;
 
     // Receiver -> Sender
     public const byte MsgPause = 0x10;
     public const byte MsgResume = 0x11;
 
-    /// <summary>FRAME bytes after the type byte: jpegLength, width, height.</summary>
+    /// <summary>v1 FRAME bytes after the type byte: jpegLength, width, height.</summary>
     public const int FrameHeaderBytes = 12;
+
+    /// <summary>FRAME2 bytes after the type byte: jpegLength, width, height, monitorIndex, monitorCount.</summary>
+    public const int Frame2HeaderBytes = 14;
+
+    /// <summary>Sanity bound for FRAME2's monitorCount; a machine will never drive this many displays.</summary>
+    public const int MaxMonitors = 16;
 
     public const int DefaultPort = 45871;
 
@@ -82,5 +90,29 @@ public static class Wire
         jpegLength = BinaryPrimitives.ReadInt32LittleEndian(src);
         width = BinaryPrimitives.ReadInt32LittleEndian(src[4..]);
         height = BinaryPrimitives.ReadInt32LittleEndian(src[8..]);
+    }
+
+    /// <summary>
+    /// FRAME2 carries one monitor per message. monitorIndex is 0-based, ordered left-to-right in the
+    /// sender's physical layout; monitorCount rides on every frame so a runtime display change needs
+    /// no reconnect, mirroring how v1 carries width/height per frame.
+    /// </summary>
+    public static void WriteFrame2Header(Span<byte> dst, int jpegLength, int width, int height, int monitorIndex, int monitorCount)
+    {
+        dst[0] = MsgFrame2;
+        BinaryPrimitives.WriteInt32LittleEndian(dst[1..], jpegLength);
+        BinaryPrimitives.WriteInt32LittleEndian(dst[5..], width);
+        BinaryPrimitives.WriteInt32LittleEndian(dst[9..], height);
+        dst[13] = checked((byte)monitorIndex);
+        dst[14] = checked((byte)monitorCount);
+    }
+
+    public static void ReadFrame2Header(ReadOnlySpan<byte> src, out int jpegLength, out int width, out int height, out int monitorIndex, out int monitorCount)
+    {
+        jpegLength = BinaryPrimitives.ReadInt32LittleEndian(src);
+        width = BinaryPrimitives.ReadInt32LittleEndian(src[4..]);
+        height = BinaryPrimitives.ReadInt32LittleEndian(src[8..]);
+        monitorIndex = src[12];
+        monitorCount = src[13];
     }
 }
